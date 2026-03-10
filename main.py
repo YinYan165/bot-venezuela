@@ -8,12 +8,13 @@ import random
 import json
 from collections import Counter
 
-# ---------------------------
-# CONFIGURACIÓN
-# ---------------------------
+# ------------------------
+# CONFIG
+# ------------------------
 
 QUERY = "venezuela"
 RSS_URL = f"https://news.google.com/rss/search?q={QUERY}&hl=es&gl=ES&ceid=ES:es"
+
 MEMORY_FILE = "bot_memory.json"
 
 MEDIOS_FIABLES = [
@@ -23,12 +24,13 @@ MEDIOS_FIABLES = [
 "DW",
 "France24",
 "EFE",
-"Associated Press"
+"Associated Press",
+"CNN"
 ]
 
-# ---------------------------
-# CLIENTE X
-# ---------------------------
+# ------------------------
+# CLIENTES API
+# ------------------------
 
 twitter_client = tweepy.Client(
     consumer_key=os.environ["API_KEY"],
@@ -38,17 +40,13 @@ twitter_client = tweepy.Client(
     wait_on_rate_limit=True
 )
 
-# ---------------------------
-# CLIENTE OPENAI
-# ---------------------------
-
 openai_client = OpenAI(
     api_key=os.environ["OPENAI_API_KEY"]
 )
 
-# ---------------------------
+# ------------------------
 # MEMORIA PERSISTENTE
-# ---------------------------
+# ------------------------
 
 def load_memory():
 
@@ -74,9 +72,9 @@ def save_memory(memory):
 
 memory = load_memory()
 
-# ---------------------------
+# ------------------------
 # OBTENER NOTICIAS
-# ---------------------------
+# ------------------------
 
 def get_news():
 
@@ -85,15 +83,14 @@ def get_news():
     noticias = []
 
     for entry in feed.entries:
-
         noticias.append(entry.title)
 
     return noticias
 
 
-# ---------------------------
+# ------------------------
 # DETECTAR TENDENCIA
-# ---------------------------
+# ------------------------
 
 def detect_trend(noticias):
 
@@ -130,45 +127,46 @@ def detect_trend(noticias):
     return random.choice(noticias)
 
 
-# ---------------------------
-# GENERAR TWEET
-# ---------------------------
+# ------------------------
+# GENERAR TWEET OPTIMIZADO
+# ------------------------
 
 def generate_tweet(titular):
 
     prompt = f"""
-Escribe un tweet informativo sobre esta noticia relacionada con Venezuela.
+Resume esta noticia sobre Venezuela en un tweet claro y directo.
 
 Titular:
 {titular}
 
-Incluye:
-- breve contexto político o económico
-- tono periodístico
-- máximo 250 caracteres
+Reglas:
+- máximo 200 caracteres
+- español
+- una frase clara
+- tono informativo
 - sin hashtags
 """
 
     response = openai_client.chat.completions.create(
         model="gpt-4o-mini",
         messages=[
-            {"role":"system","content":"Eres analista de política y economía venezolana."},
+            {"role":"system","content":"Eres analista político y económico especializado en Venezuela."},
             {"role":"user","content":prompt}
         ],
-        max_tokens=120
+        max_tokens=100
     )
 
     tweet = response.choices[0].message.content.strip()
 
-    if len(tweet) > 280:
-        tweet = tweet[:277] + "..."
+    if len(tweet) > 200:
+        tweet = tweet[:197] + "..."
 
     return tweet
 
 
-# ---------------------------
+# ------------------------
 # PUBLICAR TWEET
-# ---------------------------
+# ------------------------
 
 def publish_tweet():
 
@@ -183,7 +181,9 @@ def publish_tweet():
         print("Titular:", titular)
         print("Tweet:", tweet)
 
-        for intento in range(3):
+        time.sleep(random.randint(10,40))
+
+        for intento in range(6):
 
             try:
 
@@ -199,21 +199,23 @@ def publish_tweet():
 
             except Exception as e:
 
-                print("Intento fallido:", e)
+                espera = 60 * (intento + 1)
 
-                if intento < 2:
-                    time.sleep(30)
+                print("Intento", intento + 1, "falló:", e)
+                print("Esperando", espera, "segundos")
 
-        print("No se pudo publicar")
+                time.sleep(espera)
+
+        print("No se pudo publicar después de varios intentos")
 
     except Exception as e:
 
         print("Error publicando:", e)
 
 
-# ---------------------------
+# ------------------------
 # BUSCAR TWEET VIRAL
-# ---------------------------
+# ------------------------
 
 def find_relevant_tweet():
 
@@ -239,7 +241,7 @@ def find_relevant_tweet():
 
             score = metrics["like_count"] + metrics["retweet_count"]
 
-            if score > 200:
+            if score > 500:
                 candidatos.append(tweet)
 
         if candidatos:
@@ -252,21 +254,21 @@ def find_relevant_tweet():
     return None
 
 
-# ---------------------------
+# ------------------------
 # GENERAR RESPUESTA
-# ---------------------------
+# ------------------------
 
 def generate_reply(texto):
 
     prompt = f"""
-Responde con un comentario breve y analítico al siguiente tweet sobre Venezuela.
+Responde brevemente al siguiente tweet sobre Venezuela.
 
 Tweet:
 {texto}
 
 Reglas:
-- máximo 200 caracteres
-- tono informativo
+- máximo 180 caracteres
+- comentario analítico
 """
 
     response = openai_client.chat.completions.create(
@@ -281,9 +283,9 @@ Reglas:
     return response.choices[0].message.content.strip()
 
 
-# ---------------------------
+# ------------------------
 # RESPONDER TWEET
-# ---------------------------
+# ------------------------
 
 def reply_to_tweet():
 
@@ -313,22 +315,22 @@ def reply_to_tweet():
         print("Error respondiendo:", e)
 
 
-# ---------------------------
+# ------------------------
 # CICLO BOT
-# ---------------------------
+# ------------------------
 
 def ciclo_bot():
 
     publish_tweet()
 
-    time.sleep(20)
+    time.sleep(random.randint(15,40))
 
     reply_to_tweet()
 
 
-# ---------------------------
+# ------------------------
 # SCHEDULER
-# ---------------------------
+# ------------------------
 
 schedule.every(4).hours.do(ciclo_bot)
 
