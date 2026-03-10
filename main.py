@@ -14,7 +14,18 @@ from collections import Counter
 
 QUERY = "venezuela"
 RSS_URL = f"https://news.google.com/rss/search?q={QUERY}&hl=es&gl=ES&ceid=ES:es"
+
 MEMORY_FILE = "bot_memory.json"
+
+MEDIOS_FIABLES = [
+"BBC",
+"Reuters",
+"El País",
+"DW",
+"France24",
+"EFE",
+"Associated Press"
+]
 
 # ------------------------
 # TWITTER CLIENT
@@ -37,7 +48,7 @@ openai_client = OpenAI(
 )
 
 # ------------------------
-# MEMORIA PERSISTENTE
+# MEMORIA
 # ------------------------
 
 def load_memory():
@@ -82,29 +93,22 @@ def get_news():
 
 
 # ------------------------
-# DETECTAR TENDENCIA
+# DETECTAR NOTICIA RELEVANTE
 # ------------------------
 
 def detect_trend(noticias):
 
-    claves = []
+    filtradas = []
 
     for titulo in noticias:
 
-        palabras = titulo.lower().split()
-
-        claves.append(" ".join(palabras[:6]))
-
-    conteo = Counter(claves)
-
-    tendencia = conteo.most_common(1)[0][0]
-
-    for titulo in noticias:
-
-        if tendencia in titulo.lower():
+        if any(medio.lower() in titulo.lower() for medio in MEDIOS_FIABLES):
 
             if titulo not in memory["published_titles"]:
-                return titulo
+                filtradas.append(titulo)
+
+    if filtradas:
+        return random.choice(filtradas)
 
     return random.choice(noticias)
 
@@ -116,22 +120,22 @@ def detect_trend(noticias):
 def generate_tweet(titular):
 
     prompt = f"""
-Escribe un tweet informativo sobre esta noticia de Venezuela.
+Escribe un tweet informativo sobre esta noticia relacionada con Venezuela.
 
 Titular:
 {titular}
 
-Reglas:
-- máximo 250 caracteres
+Incluye:
+- breve contexto político o económico
 - tono periodístico
-- español
+- máximo 250 caracteres
 - sin hashtags
 """
 
     response = openai_client.chat.completions.create(
         model="gpt-4o-mini",
         messages=[
-            {"role": "system", "content": "Eres periodista especializado en Venezuela."},
+            {"role": "system", "content": "Eres analista político especializado en Venezuela."},
             {"role": "user", "content": prompt}
         ],
         max_tokens=120
@@ -190,7 +194,7 @@ def publish_tweet():
 
 
 # ------------------------
-# BUSCAR TWEET RELEVANTE
+# BUSCAR TWEET VIRAL
 # ------------------------
 
 def find_relevant_tweet():
@@ -217,7 +221,7 @@ def find_relevant_tweet():
 
             score = metrics["like_count"] + metrics["retweet_count"]
 
-            if score > 20:
+            if score > 200:
                 candidatos.append(tweet)
 
         if candidatos:
@@ -245,7 +249,6 @@ Tweet:
 Reglas:
 - máximo 200 caracteres
 - tono informativo
-- español
 """
 
     response = openai_client.chat.completions.create(
@@ -269,7 +272,7 @@ def reply_to_tweet():
     tweet = find_relevant_tweet()
 
     if not tweet:
-        print("No tweet relevante")
+        print("No tweet viral encontrado")
         return
 
     respuesta = generate_reply(tweet.text)
@@ -292,7 +295,7 @@ def reply_to_tweet():
 
 
 # ------------------------
-# CICLO PRINCIPAL
+# CICLO BOT
 # ------------------------
 
 def ciclo_bot():
@@ -308,7 +311,7 @@ def ciclo_bot():
 # SCHEDULER
 # ------------------------
 
-schedule.every(2).hours.do(ciclo_bot)
+schedule.every(4).hours.do(ciclo_bot)
 
 print("Bot iniciado")
 
