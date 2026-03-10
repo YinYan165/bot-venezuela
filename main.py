@@ -4,9 +4,19 @@ import time
 import os
 import schedule
 import feedparser
+from collections import Counter
 import random
 
-# ----------- X CLIENT -----------
+# -----------------------------
+# CONFIG
+# -----------------------------
+
+QUERY = "venezuela"
+RSS_URL = f"https://news.google.com/rss/search?q={QUERY}&hl=es&gl=ES&ceid=ES:es"
+
+# -----------------------------
+# TWITTER CLIENT
+# -----------------------------
 
 twitter_client = tweepy.Client(
     consumer_key=os.environ["API_KEY"],
@@ -16,50 +26,91 @@ twitter_client = tweepy.Client(
     wait_on_rate_limit=True
 )
 
-# ----------- OPENAI -----------
+# -----------------------------
+# OPENAI CLIENT
+# -----------------------------
 
 openai_client = OpenAI(
     api_key=os.environ["OPENAI_API_KEY"]
 )
 
-# ----------- RSS DE NOTICIAS -----------
+# -----------------------------
+# MEMORIA DE TITULARES
+# -----------------------------
 
-FUENTES = [
-    "https://news.google.com/rss/search?q=venezuela&hl=es&gl=ES&ceid=ES:es",
-    "https://feeds.bbci.co.uk/mundo/topics/cvenezuel/rss.xml"
-]
+titulares_publicados = set()
 
-# guardar titulares ya usados
-titulares_usados = set()
+# -----------------------------
+# OBTENER NOTICIAS
+# -----------------------------
 
-# ----------- OBTENER TITULAR -----------
+def obtener_noticias():
 
-def obtener_titular():
-    for fuente in FUENTES:
-        feed = feedparser.parse(fuente)
+    feed = feedparser.parse(RSS_URL)
 
-        for entry in feed.entries:
-            titulo = entry.title
+    noticias = []
 
-            if titulo not in titulares_usados:
-                titulares_usados.add(titulo)
-                return titulo
+    for entry in feed.entries:
 
-    return None
+        titulo = entry.title
+        fuente = entry.source.title if "source" in entry else ""
+
+        noticias.append({
+            "titulo": titulo,
+            "fuente": fuente
+        })
+
+    return noticias
 
 
-# ----------- GENERAR TWEET -----------
+# -----------------------------
+# DETECTAR NOTICIA TENDENCIA
+# -----------------------------
+
+def detectar_tendencia(noticias):
+
+    # simplificación de titulares
+    claves = []
+
+    for n in noticias:
+
+        titulo = n["titulo"].lower()
+
+        palabras = titulo.split()
+
+        claves.append(" ".join(palabras[:6]))
+
+    conteo = Counter(claves)
+
+    tendencia = conteo.most_common(1)[0][0]
+
+    for n in noticias:
+
+        if tendencia in n["titulo"].lower():
+
+            if n["titulo"] not in titulares_publicados:
+                return n["titulo"]
+
+    return random.choice(noticias)["titulo"]
+
+
+# -----------------------------
+# GENERAR TWEET
+# -----------------------------
 
 def generar_tweet(titular):
 
     prompt = f"""
-    A partir del siguiente titular sobre Venezuela, escribe un tweet informativo
-    breve, claro y objetivo en español.
+    Escribe un tweet periodístico breve sobre esta noticia relacionada con Venezuela.
 
     Titular:
     {titular}
 
-    El tweet debe tener máximo 250 caracteres.
+    Reglas:
+    - máximo 250 caracteres
+    - español
+    - tono informativo
+    - no usar hashtags
     """
 
     response = openai_client.chat.completions.create(
@@ -79,40 +130,63 @@ def generar_tweet(titular):
     return tweet
 
 
-# ----------- PUBLICAR -----------
+# -----------------------------
+# PUBLICAR TWEET
+# -----------------------------
 
 def publicar_tweet():
 
     try:
 
-        titular = obtener_titular()
+        noticias = obtener_noticias()
 
-        if not titular:
-            print("No se encontraron titulares nuevos")
-            return
+        titular = detectar_tendencia(noticias)
+
+        titulares_publicados.add(titular)
 
         tweet = generar_tweet(titular)
 
         print("Titular:", titular)
         print("Tweet:", tweet)
 
-        response = twitter_client.create_tweet(text=tweet)
+        intentos = 3
 
-        print("Tweet publicado:", response.data["id"])
+        for intento in range(intentos):
+
+            try:
+
+                response = twitter_client.create_tweet(text=tweet)
+
+                print("Tweet publicado:", response.data["id"])
+
+                return
+
+            except Exception as e:
+
+                print("Intento", intento + 1, "falló:", e)
+
+                if intento < intentos - 1:
+                    time.sleep(30)
+
+        print("No se pudo publicar el tweet")
 
     except Exception as e:
-        print("Error:", e)
+
+        print("Error general:", e)
 
 
-# ----------- SCHEDULER -----------
+# -----------------------------
+# SCHEDULER
+# -----------------------------
 
 schedule.every(2).hours.do(publicar_tweet)
 
-print("Bot iniciado")
+print("Bot iniciado...")
 
-# primer tweet al arrancar
 publicar_tweet()
 
 while True:
+
     schedule.run_pending()
+
     time.sleep(60)
