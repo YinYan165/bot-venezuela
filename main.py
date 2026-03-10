@@ -8,13 +8,12 @@ import random
 import json
 from collections import Counter
 
-# ------------------------
-# CONFIG
-# ------------------------
+# ---------------------------
+# CONFIGURACIÓN
+# ---------------------------
 
 QUERY = "venezuela"
 RSS_URL = f"https://news.google.com/rss/search?q={QUERY}&hl=es&gl=ES&ceid=ES:es"
-
 MEMORY_FILE = "bot_memory.json"
 
 MEDIOS_FIABLES = [
@@ -27,9 +26,9 @@ MEDIOS_FIABLES = [
 "Associated Press"
 ]
 
-# ------------------------
-# TWITTER CLIENT
-# ------------------------
+# ---------------------------
+# CLIENTE X
+# ---------------------------
 
 twitter_client = tweepy.Client(
     consumer_key=os.environ["API_KEY"],
@@ -39,17 +38,17 @@ twitter_client = tweepy.Client(
     wait_on_rate_limit=True
 )
 
-# ------------------------
-# OPENAI CLIENT
-# ------------------------
+# ---------------------------
+# CLIENTE OPENAI
+# ---------------------------
 
 openai_client = OpenAI(
     api_key=os.environ["OPENAI_API_KEY"]
 )
 
-# ------------------------
-# MEMORIA
-# ------------------------
+# ---------------------------
+# MEMORIA PERSISTENTE
+# ---------------------------
 
 def load_memory():
 
@@ -75,9 +74,9 @@ def save_memory(memory):
 
 memory = load_memory()
 
-# ------------------------
+# ---------------------------
 # OBTENER NOTICIAS
-# ------------------------
+# ---------------------------
 
 def get_news():
 
@@ -92,30 +91,48 @@ def get_news():
     return noticias
 
 
-# ------------------------
-# DETECTAR NOTICIA RELEVANTE
-# ------------------------
+# ---------------------------
+# DETECTAR TENDENCIA
+# ---------------------------
 
 def detect_trend(noticias):
 
-    filtradas = []
+    claves = []
 
     for titulo in noticias:
 
-        if any(medio.lower() in titulo.lower() for medio in MEDIOS_FIABLES):
+        palabras = titulo.lower().split()
+
+        clave = " ".join(palabras[:6])
+
+        claves.append(clave)
+
+    conteo = Counter(claves)
+
+    tendencia = conteo.most_common(1)[0][0]
+
+    candidatos = []
+
+    for titulo in noticias:
+
+        if tendencia in titulo.lower():
 
             if titulo not in memory["published_titles"]:
-                filtradas.append(titulo)
 
-    if filtradas:
-        return random.choice(filtradas)
+                if any(m.lower() in titulo.lower() for m in MEDIOS_FIABLES):
+
+                    candidatos.append(titulo)
+
+    if candidatos:
+
+        return random.choice(candidatos)
 
     return random.choice(noticias)
 
 
-# ------------------------
+# ---------------------------
 # GENERAR TWEET
-# ------------------------
+# ---------------------------
 
 def generate_tweet(titular):
 
@@ -135,8 +152,8 @@ Incluye:
     response = openai_client.chat.completions.create(
         model="gpt-4o-mini",
         messages=[
-            {"role": "system", "content": "Eres analista político especializado en Venezuela."},
-            {"role": "user", "content": prompt}
+            {"role":"system","content":"Eres analista de política y economía venezolana."},
+            {"role":"user","content":prompt}
         ],
         max_tokens=120
     )
@@ -149,9 +166,9 @@ Incluye:
     return tweet
 
 
-# ------------------------
+# ---------------------------
 # PUBLICAR TWEET
-# ------------------------
+# ---------------------------
 
 def publish_tweet():
 
@@ -175,6 +192,7 @@ def publish_tweet():
                 print("Tweet publicado:", response.data["id"])
 
                 memory["published_titles"].append(titular)
+
                 save_memory(memory)
 
                 return
@@ -193,9 +211,9 @@ def publish_tweet():
         print("Error publicando:", e)
 
 
-# ------------------------
+# ---------------------------
 # BUSCAR TWEET VIRAL
-# ------------------------
+# ---------------------------
 
 def find_relevant_tweet():
 
@@ -234,9 +252,9 @@ def find_relevant_tweet():
     return None
 
 
-# ------------------------
+# ---------------------------
 # GENERAR RESPUESTA
-# ------------------------
+# ---------------------------
 
 def generate_reply(texto):
 
@@ -254,8 +272,8 @@ Reglas:
     response = openai_client.chat.completions.create(
         model="gpt-4o-mini",
         messages=[
-            {"role": "system", "content": "Eres analista político venezolano."},
-            {"role": "user", "content": prompt}
+            {"role":"system","content":"Eres analista político venezolano."},
+            {"role":"user","content":prompt}
         ],
         max_tokens=80
     )
@@ -263,9 +281,9 @@ Reglas:
     return response.choices[0].message.content.strip()
 
 
-# ------------------------
+# ---------------------------
 # RESPONDER TWEET
-# ------------------------
+# ---------------------------
 
 def reply_to_tweet():
 
@@ -285,6 +303,7 @@ def reply_to_tweet():
         )
 
         memory["replied_tweets"].append(tweet.id)
+
         save_memory(memory)
 
         print("Respuesta enviada")
@@ -294,9 +313,9 @@ def reply_to_tweet():
         print("Error respondiendo:", e)
 
 
-# ------------------------
+# ---------------------------
 # CICLO BOT
-# ------------------------
+# ---------------------------
 
 def ciclo_bot():
 
@@ -307,9 +326,9 @@ def ciclo_bot():
     reply_to_tweet()
 
 
-# ------------------------
+# ---------------------------
 # SCHEDULER
-# ------------------------
+# ---------------------------
 
 schedule.every(4).hours.do(ciclo_bot)
 
