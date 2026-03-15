@@ -5,6 +5,7 @@ import time
 import schedule
 import feedparser
 import requests
+import json
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from collections import Counter
@@ -33,6 +34,30 @@ twitter_media = tweepy.API(
 
 # CLIENTE OPENAI
 openai_client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
+
+
+# -------------------------
+# MEMORIA
+# -------------------------
+
+def cargar_memoria():
+
+    try:
+
+        with open("bot_memory.json","r") as f:
+
+            return json.load(f)
+
+    except:
+
+        return {"publicadas":[]}
+
+
+def guardar_memoria(memoria):
+
+    with open("bot_memory.json","w") as f:
+
+        json.dump(memoria,f)
 
 
 # -------------------------
@@ -162,9 +187,17 @@ def descargar_imagen(url):
 
 def publicar():
 
+    memoria = cargar_memoria()
+
     noticias = get_news()
 
     noticia = detectar_tendencia(noticias)
+
+    if noticia["titulo"] in memoria["publicadas"]:
+
+        print("Noticia ya publicada")
+
+        return
 
     tweet = generar_tweet(noticia["titulo"])
 
@@ -187,6 +220,10 @@ def publicar():
 
             twitter_client.create_tweet(text=tweet)
 
+        memoria["publicadas"].append(noticia["titulo"])
+
+        guardar_memoria(memoria)
+
     except Exception as e:
 
         print("Error publicando:", e)
@@ -206,7 +243,6 @@ def ciclo():
 schedule.every(1).minutes.do(ciclo)
 
 print("Bot iniciado")
-
 
 while True:
 
