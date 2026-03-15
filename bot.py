@@ -77,7 +77,7 @@ def horario_activo():
     return False
 
 # -------------------------
-# OBTENER NOTICIAS
+# LEER NOTICIAS
 # -------------------------
 
 def get_news():
@@ -117,7 +117,7 @@ def get_news():
     return noticias
 
 # -------------------------
-# ANALIZAR TEMAS
+# DETECTAR TEMA DOMINANTE
 # -------------------------
 
 def detectar_crecimiento(noticias):
@@ -185,36 +185,7 @@ Máximo 180 caracteres.
     return texto[:200]
 
 # -------------------------
-# GENERAR HILO
-# -------------------------
-
-def generar_hilo(titular):
-
-    prompt=f"""
-Explica esta noticia sobre Venezuela en un hilo de 3 tweets.
-
-Titular:
-{titular}
-
-Cada tweet máximo 180 caracteres.
-"""
-
-    r=openai_client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[
-        {"role":"system","content":"Analista político venezolano"},
-        {"role":"user","content":prompt}
-        ]
-    )
-
-    texto=r.choices[0].message.content
-
-    tweets=[t.strip() for t in texto.split("\n") if t.strip()]
-
-    return tweets
-
-# -------------------------
-# DESCARGAR IMAGEN
+# DESCARGAR IMAGEN REAL
 # -------------------------
 
 def descargar_imagen(url):
@@ -235,35 +206,43 @@ def descargar_imagen(url):
         return None
 
 # -------------------------
-# PUBLICAR HILO
+# GENERAR IMAGEN IA
 # -------------------------
 
-def publicar_hilo(tweets):
+def generar_imagen_ia(titular):
 
-    anterior=None
+    try:
 
-    for t in tweets:
+        prompt=f"news photo illustration about: {titular}"
 
-        if anterior:
+        img=openai_client.images.generate(
+            model="gpt-image-1",
+            prompt=prompt,
+            size="1024x1024"
+        )
 
-            r=twitter_client.create_tweet(
-                text=t,
-                in_reply_to_tweet_id=anterior
-            )
+        image_base64=img.data[0].b64_json
 
-        else:
+        import base64
 
-            r=twitter_client.create_tweet(text=t)
+        with open("imagen.jpg","wb") as f:
+            f.write(base64.b64decode(image_base64))
 
-        anterior=r.data["id"]
+        print("Imagen generada por IA")
 
-        time.sleep(5)
+        return "imagen.jpg"
+
+    except Exception as e:
+
+        print("Error generando imagen IA:",e)
+
+        return None
 
 # -------------------------
 # PUBLICAR
 # -------------------------
 
-def publicar(alerta=False):
+def publicar():
 
     memoria=cargar_memoria()
 
@@ -281,30 +260,18 @@ def publicar(alerta=False):
 
     tendencia=frecuencia>=3
 
-    print("Frecuencia tema:",frecuencia)
-
-    if frecuencia>=5:
-
-        print("Generando hilo")
-
-        hilo=generar_hilo(noticia["titulo"])
-
-        publicar_hilo(hilo)
-
-        memoria["publicadas"].append(titulo_limpio)
-
-        guardar_memoria(memoria)
-
-        return
-
     tweet=generar_tweet(noticia["titulo"],tendencia)
 
     if noticia["fuente"]:
         tweet=f"{tweet} ({noticia['fuente']})"
 
-    print("Publicando:",tweet)
-
     imagen=descargar_imagen(noticia["imagen"])
+
+    if not imagen:
+
+        print("No hay imagen en RSS, generando con IA")
+
+        imagen=generar_imagen_ia(noticia["titulo"])
 
     try:
 
@@ -335,27 +302,8 @@ def publicar(alerta=False):
 
 def ciclo():
 
-    memoria=cargar_memoria()
-
-    noticias=get_news()
-
-    tema,frecuencia=detectar_crecimiento(noticias)
-
-    ahora=time.time()
-
     if horario_activo():
-
         publicar()
-
-    else:
-
-        if frecuencia>=4:
-
-            if ahora-memoria["ultimo_aviso"]>3600:
-
-                print("Tema dominante fuera de horario")
-
-                publicar(alerta=True)
 
 schedule.every(1).minutes.do(ciclo)
 
