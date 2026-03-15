@@ -6,15 +6,25 @@ import schedule
 import feedparser
 import requests
 import json
+import random
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from collections import Counter
+
+# -------------------------
+# CONFIG
+# -------------------------
 
 TIMEZONE = ZoneInfo("America/Caracas")
 
 RSS_URL = "https://news.google.com/rss/search?q=venezuela&hl=es&gl=ES&ceid=ES:es"
 
-# CLIENTE TWITTER V2
+MEMORY_FILE = "bot_memory.json"
+
+# -------------------------
+# CLIENTES API
+# -------------------------
+
 twitter_client = tweepy.Client(
     consumer_key=os.environ["API_KEY"],
     consumer_secret=os.environ["API_SECRET"],
@@ -22,7 +32,6 @@ twitter_client = tweepy.Client(
     access_token_secret=os.environ["ACCESS_TOKEN_SECRET"]
 )
 
-# CLIENTE TWITTER MEDIA
 twitter_media = tweepy.API(
     tweepy.OAuth1UserHandler(
         os.environ["API_KEY"],
@@ -32,33 +41,22 @@ twitter_media = tweepy.API(
     )
 )
 
-# CLIENTE OPENAI
 openai_client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
-
 
 # -------------------------
 # MEMORIA
 # -------------------------
 
 def cargar_memoria():
-
     try:
-
-        with open("bot_memory.json","r") as f:
-
+        with open(MEMORY_FILE,"r") as f:
             return json.load(f)
-
     except:
-
-        return {"publicadas":[]}
-
+        return {"publicadas":[], "ultimo_aviso":0}
 
 def guardar_memoria(memoria):
-
-    with open("bot_memory.json","w") as f:
-
+    with open(MEMORY_FILE,"w") as f:
         json.dump(memoria,f)
-
 
 # -------------------------
 # HORARIO
@@ -66,18 +64,16 @@ def guardar_memoria(memoria):
 
 def horario_activo():
 
-    now = datetime.now(TIMEZONE)
+    now=datetime.now(TIMEZONE)
 
-    h = now.hour
-    m = now.minute
+    h=now.hour
+    m=now.minute
 
-    if (7 <= h < 9) or (12 <= h < 15) or (19 <= h < 22):
-
+    if (7<=h<9) or (12<=h<15) or (19<=h<22):
         if m in [0,30]:
             return True
 
     return False
-
 
 # -------------------------
 # LEER NOTICIAS
@@ -85,61 +81,70 @@ def horario_activo():
 
 def get_news():
 
-    feed = feedparser.parse(RSS_URL)
+    feed=feedparser.parse(RSS_URL)
 
-    noticias = []
+    noticias=[]
 
     for entry in feed.entries:
 
-        imagen = None
+        imagen=None
 
         if "media_content" in entry:
+            imagen=entry.media_content[0]["url"]
 
-            imagen = entry.media_content[0]["url"]
+        fuente=""
+
+        if "source" in entry:
+            fuente=entry.source["title"]
 
         noticias.append({
-            "titulo": entry.title,
-            "imagen": imagen
+            "titulo":entry.title,
+            "imagen":imagen,
+            "fuente":fuente
         })
 
     return noticias
 
-
 # -------------------------
-# DETECTAR TENDENCIA
+# DETECTAR TEMA DOMINANTE
 # -------------------------
 
-def detectar_tendencia(noticias):
+def analizar_temas(noticias):
 
-    claves = []
+    claves=[]
 
     for n in noticias:
-
-        clave = " ".join(n["titulo"].lower().split()[:5])
-
+        clave=" ".join(n["titulo"].lower().split()[:5])
         claves.append(clave)
 
-    conteo = Counter(claves)
+    conteo=Counter(claves)
 
-    tendencia = conteo.most_common(1)[0][0]
+    tema, frecuencia = conteo.most_common(1)[0]
+
+    return tema, frecuencia
+
+# -------------------------
+# SELECCIONAR NOTICIA
+# -------------------------
+
+def seleccionar_noticia(noticias):
+
+    tema,_ = analizar_temas(noticias)
 
     for n in noticias:
-
-        if tendencia in n["titulo"].lower():
-
+        if tema in n["titulo"].lower():
             return n
 
     return noticias[0]
-
 
 # -------------------------
 # GENERAR TWEET
 # -------------------------
 
-def generar_tweet(titular):
+def generar_tweet(titular, tendencia=False):
 
     prompt=f"""
-Resume esta noticia sobre Venezuela en un tweet claro.
+Resume esta noticia sobre Venezuela en un tweet informativo.
 
 Titular:
 {titular}
@@ -150,13 +155,20 @@ Máximo 180 caracteres.
     r=openai_client.chat.completions.create(
         model="gpt-4o-mini",
         messages=[
-        {"role":"system","content":"Eres analista político venezolano"},
+        {"role":"system","content":"Redactor periodístico especializado en política latinoamericana"},
         {"role":"user","content":prompt}
         ]
     )
 
-    return r.choices[0].message.content.strip()
+    texto=r.choices[0].message.content.strip()
 
+    prefijos=["","Actualización:","Informe:"]
+    texto=f"{random.choice(prefijos)} {texto}".strip()
+
+    if tendencia:
+        texto="📰 Tendencia en medios: "+texto
+
+    return texto[:200]
 
 # -------------------------
 # DESCARGAR IMAGEN
@@ -169,7 +181,7 @@ def descargar_imagen(url):
 
     try:
 
-        img = requests.get(url).content
+        img=requests.get(url,timeout=10).content
 
         with open("imagen.jpg","wb") as f:
             f.write(img)
@@ -177,39 +189,44 @@ def descargar_imagen(url):
         return "imagen.jpg"
 
     except:
-
         return None
-
 
 # -------------------------
 # PUBLICAR
 # -------------------------
 
-def publicar():
+def publicar(alerta=False):
 
-    memoria = cargar_memoria()
+    memoria=cargar_memoria()
 
-    noticias = get_news()
+    noticias=get_news()
 
-    noticia = detectar_tendencia(noticias)
+    noticia=seleccionar_noticia(noticias)
 
-    if noticia["titulo"] in memoria["publicadas"]:
+    titulo_limpio=noticia["titulo"].lower()[:80]
 
+    if titulo_limpio in memoria["publicadas"]:
         print("Noticia ya publicada")
-
         return
 
-    tweet = generar_tweet(noticia["titulo"])
+    tema,frecuencia = analizar_temas(noticias)
 
-    print("Publicando:", tweet)
+    tendencia = frecuencia >= 3
 
-    imagen = descargar_imagen(noticia["imagen"])
+    tweet=generar_tweet(noticia["titulo"],tendencia)
+
+    if noticia["fuente"]:
+        tweet=f"{tweet} ({noticia['fuente']})"
+
+    print("Publicando:",tweet)
+
+    imagen=descargar_imagen(noticia["imagen"])
 
     try:
 
         if imagen:
 
-            media = twitter_media.media_upload(imagen)
+            media=twitter_media.media_upload(imagen)
 
             twitter_client.create_tweet(
                 text=tweet,
@@ -220,14 +237,16 @@ def publicar():
 
             twitter_client.create_tweet(text=tweet)
 
-        memoria["publicadas"].append(noticia["titulo"])
+        memoria["publicadas"].append(titulo_limpio)
+
+        if alerta:
+            memoria["ultimo_aviso"]=time.time()
 
         guardar_memoria(memoria)
 
     except Exception as e:
 
-        print("Error publicando:", e)
-
+        print("Error publicando:",e)
 
 # -------------------------
 # CICLO
@@ -235,10 +254,27 @@ def publicar():
 
 def ciclo():
 
+    memoria=cargar_memoria()
+
+    noticias=get_news()
+
+    tema,frecuencia = analizar_temas(noticias)
+
+    ahora=time.time()
+
     if horario_activo():
 
         publicar()
 
+    else:
+
+        if frecuencia >= 4:
+
+            if ahora-memoria["ultimo_aviso"] > 3600:
+
+                print("Tema dominante detectado fuera de horario")
+
+                publicar(alerta=True)
 
 schedule.every(1).minutes.do(ciclo)
 
@@ -247,5 +283,4 @@ print("Bot iniciado")
 while True:
 
     schedule.run_pending()
-
     time.sleep(30)
