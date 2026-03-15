@@ -7,6 +7,7 @@ import feedparser
 import requests
 import json
 import random
+import re
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from collections import Counter
@@ -76,7 +77,7 @@ def horario_activo():
     return False
 
 # -------------------------
-# LEER NOTICIAS
+# OBTENER NOTICIAS
 # -------------------------
 
 def get_news():
@@ -92,6 +93,16 @@ def get_news():
         if "media_content" in entry:
             imagen=entry.media_content[0]["url"]
 
+        elif "media_thumbnail" in entry:
+            imagen=entry.media_thumbnail[0]["url"]
+
+        elif "summary" in entry:
+
+            match=re.search(r'<img[^>]+src="([^">]+)"',entry.summary)
+
+            if match:
+                imagen=match.group(1)
+
         fuente=""
 
         if "source" in entry:
@@ -106,22 +117,24 @@ def get_news():
     return noticias
 
 # -------------------------
-# DETECTAR TEMA DOMINANTE
+# ANALIZAR TEMAS
 # -------------------------
 
-def analizar_temas(noticias):
+def detectar_crecimiento(noticias):
 
-    claves=[]
+    temas=[]
 
     for n in noticias:
-        clave=" ".join(n["titulo"].lower().split()[:5])
-        claves.append(clave)
 
-    conteo=Counter(claves)
+        clave=" ".join(n["titulo"].lower().split()[:6])
 
-    tema, frecuencia = conteo.most_common(1)[0]
+        temas.append(clave)
 
-    return tema, frecuencia
+    conteo=Counter(temas)
+
+    tema,frecuencia=conteo.most_common(1)[0]
+
+    return tema,frecuencia
 
 # -------------------------
 # SELECCIONAR NOTICIA
@@ -129,9 +142,10 @@ def analizar_temas(noticias):
 
 def seleccionar_noticia(noticias):
 
-    tema,_ = analizar_temas(noticias)
+    tema,_=detectar_crecimiento(noticias)
 
     for n in noticias:
+
         if tema in n["titulo"].lower():
             return n
 
@@ -141,7 +155,7 @@ def seleccionar_noticia(noticias):
 # GENERAR TWEET
 # -------------------------
 
-def generar_tweet(titular, tendencia=False):
+def generar_tweet(titular,tendencia=False):
 
     prompt=f"""
 Resume esta noticia sobre Venezuela en un tweet informativo.
@@ -171,6 +185,35 @@ Máximo 180 caracteres.
     return texto[:200]
 
 # -------------------------
+# GENERAR HILO
+# -------------------------
+
+def generar_hilo(titular):
+
+    prompt=f"""
+Explica esta noticia sobre Venezuela en un hilo de 3 tweets.
+
+Titular:
+{titular}
+
+Cada tweet máximo 180 caracteres.
+"""
+
+    r=openai_client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[
+        {"role":"system","content":"Analista político venezolano"},
+        {"role":"user","content":prompt}
+        ]
+    )
+
+    texto=r.choices[0].message.content
+
+    tweets=[t.strip() for t in texto.split("\n") if t.strip()]
+
+    return tweets
+
+# -------------------------
 # DESCARGAR IMAGEN
 # -------------------------
 
@@ -192,6 +235,31 @@ def descargar_imagen(url):
         return None
 
 # -------------------------
+# PUBLICAR HILO
+# -------------------------
+
+def publicar_hilo(tweets):
+
+    anterior=None
+
+    for t in tweets:
+
+        if anterior:
+
+            r=twitter_client.create_tweet(
+                text=t,
+                in_reply_to_tweet_id=anterior
+            )
+
+        else:
+
+            r=twitter_client.create_tweet(text=t)
+
+        anterior=r.data["id"]
+
+        time.sleep(5)
+
+# -------------------------
 # PUBLICAR
 # -------------------------
 
@@ -209,9 +277,25 @@ def publicar(alerta=False):
         print("Noticia ya publicada")
         return
 
-    tema,frecuencia = analizar_temas(noticias)
+    tema,frecuencia=detectar_crecimiento(noticias)
 
-    tendencia = frecuencia >= 3
+    tendencia=frecuencia>=3
+
+    print("Frecuencia tema:",frecuencia)
+
+    if frecuencia>=5:
+
+        print("Generando hilo")
+
+        hilo=generar_hilo(noticia["titulo"])
+
+        publicar_hilo(hilo)
+
+        memoria["publicadas"].append(titulo_limpio)
+
+        guardar_memoria(memoria)
+
+        return
 
     tweet=generar_tweet(noticia["titulo"],tendencia)
 
@@ -239,9 +323,6 @@ def publicar(alerta=False):
 
         memoria["publicadas"].append(titulo_limpio)
 
-        if alerta:
-            memoria["ultimo_aviso"]=time.time()
-
         guardar_memoria(memoria)
 
     except Exception as e:
@@ -258,7 +339,7 @@ def ciclo():
 
     noticias=get_news()
 
-    tema,frecuencia = analizar_temas(noticias)
+    tema,frecuencia=detectar_crecimiento(noticias)
 
     ahora=time.time()
 
@@ -268,11 +349,11 @@ def ciclo():
 
     else:
 
-        if frecuencia >= 4:
+        if frecuencia>=4:
 
-            if ahora-memoria["ultimo_aviso"] > 3600:
+            if ahora-memoria["ultimo_aviso"]>3600:
 
-                print("Tema dominante detectado fuera de horario")
+                print("Tema dominante fuera de horario")
 
                 publicar(alerta=True)
 
