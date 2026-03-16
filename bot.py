@@ -8,6 +8,7 @@ import requests
 import json
 import random
 import re
+import base64
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from collections import Counter
@@ -18,12 +19,28 @@ from collections import Counter
 
 TIMEZONE = ZoneInfo("America/Caracas")
 
-RSS_URL = "https://news.google.com/rss/search?q=venezuela&hl=es&gl=ES&ceid=ES:es"
+RSS_FEEDS = [
+
+# Google News
+"https://news.google.com/rss/search?q=venezuela&hl=es&gl=ES&ceid=ES:es",
+
+# Internacional
+"https://feeds.reuters.com/reuters/worldNews",
+"https://feeds.bbci.co.uk/mundo/rss.xml",
+"https://rss.dw.com/rdf/rss-es-all",
+"https://feeds.elpais.com/mrss-s/pages/ep/site/elpais.com/portada",
+
+# Venezuela
+"https://www.elnacional.com/feed/",
+"https://talcualdigital.com/feed/",
+"https://elpitazo.net/feed/"
+
+]
 
 MEMORY_FILE = "bot_memory.json"
 
 # -------------------------
-# CLIENTES API
+# CLIENTES
 # -------------------------
 
 twitter_client = tweepy.Client(
@@ -49,13 +66,15 @@ openai_client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
 # -------------------------
 
 def cargar_memoria():
+
     try:
         with open(MEMORY_FILE,"r") as f:
             return json.load(f)
     except:
-        return {"publicadas":[], "ultimo_aviso":0}
+        return {"publicadas":[]}
 
 def guardar_memoria(memoria):
+
     with open(MEMORY_FILE,"w") as f:
         json.dump(memoria,f)
 
@@ -65,35 +84,51 @@ def guardar_memoria(memoria):
 
 def horario_activo():
 
-    now=datetime.now(TIMEZONE)
+    now = datetime.now(TIMEZONE)
 
-    h=now.hour
-    m=now.minute
+    h = now.hour
+    m = now.minute
 
-    if (7<=h<9) or (12<=h<15) or (19<=h<22):
+    # Horas pico → cada 30 min
+    if (7 <= h < 9) or (12 <= h < 15) or (19 <= h < 22):
+
         if m in [0,30]:
+
             return True
 
+    # Horas normales → cada hora
+    if 6 <= h <= 23:
+
+        if m == 0:
+
+            return True
+
+    # Madrugada → solo 2:00 y 4:00
+    if h in [2,4] and m == 0:
+
+        return True
+
     return False
-
 # -------------------------
-# LEER NOTICIAS
+# LEER RSS
 # -------------------------
 
-def get_news():
-
-    feed=feedparser.parse(RSS_URL)
+def leer_feed(url):
 
     noticias=[]
+
+    feed=feedparser.parse(url)
 
     for entry in feed.entries:
 
         imagen=None
 
         if "media_content" in entry:
+
             imagen=entry.media_content[0]["url"]
 
         elif "media_thumbnail" in entry:
+
             imagen=entry.media_thumbnail[0]["url"]
 
         elif "summary" in entry:
@@ -101,64 +136,97 @@ def get_news():
             match=re.search(r'<img[^>]+src="([^">]+)"',entry.summary)
 
             if match:
+
                 imagen=match.group(1)
 
-        fuente=""
-
-        if "source" in entry:
-            fuente=entry.source["title"]
+        fuente=feed.feed.get("title","")
 
         noticias.append({
+
             "titulo":entry.title,
             "imagen":imagen,
             "fuente":fuente
+
         })
 
     return noticias
 
 # -------------------------
-# DETECTAR TEMA DOMINANTE
+# AGREGAR TODAS LAS FUENTES
 # -------------------------
 
-def detectar_crecimiento(noticias):
+def get_news():
 
-    temas=[]
+    todas=[]
+
+    for url in RSS_FEEDS:
+
+        try:
+
+            noticias=leer_feed(url)
+
+            todas.extend(noticias)
+
+        except:
+
+            pass
+
+    return todas
+
+# -------------------------
+# ORDENAR NOTICIAS
+# -------------------------
+
+def ordenar_noticias(noticias):
+
+    claves=[]
 
     for n in noticias:
 
         clave=" ".join(n["titulo"].lower().split()[:6])
 
-        temas.append(clave)
+        claves.append(clave)
 
-    conteo=Counter(temas)
+    conteo=Counter(claves)
 
-    tema,frecuencia=conteo.most_common(1)[0]
+    noticias_ordenadas=sorted(
 
-    return tema,frecuencia
+        noticias,
+
+        key=lambda n: conteo[" ".join(n["titulo"].lower().split()[:6])],
+
+        reverse=True
+
+    )
+
+    return noticias_ordenadas
 
 # -------------------------
-# SELECCIONAR NOTICIA
+# SELECCIONAR NOTICIA NUEVA
 # -------------------------
 
-def seleccionar_noticia(noticias):
+def seleccionar_noticia(noticias,memoria):
 
-    tema,_=detectar_crecimiento(noticias)
+    noticias=ordenar_noticias(noticias)
 
     for n in noticias:
 
-        if tema in n["titulo"].lower():
+        titulo=n["titulo"].lower()[:80]
+
+        if titulo not in memoria["publicadas"]:
+
             return n
 
-    return noticias[0]
+    return None
 
 # -------------------------
 # GENERAR TWEET
 # -------------------------
 
-def generar_tweet(titular,tendencia=False):
+def generar_tweet(titular):
 
     prompt=f"""
-Resume esta noticia sobre Venezuela en un tweet informativo.
+Escribe un tweet informativo sobre esta noticia de Venezuela.
 
 Titular:
 {titular}
@@ -167,30 +235,62 @@ Máximo 180 caracteres.
 """
 
     r=openai_client.chat.completions.create(
+
         model="gpt-4o-mini",
+
         messages=[
-        {"role":"system","content":"Redactor periodístico especializado en política latinoamericana"},
+
+        {"role":"system","content":"Redactor periodístico especializado en Venezuela"},
         {"role":"user","content":prompt}
+
         ]
+
     )
 
     texto=r.choices[0].message.content.strip()
 
-    prefijos=["","Actualización:","Informe:"]
-    texto=f"{random.choice(prefijos)} {texto}".strip()
+    prefijos=["Actualización:","Informe:","Última hora:",""]
 
-    if tendencia:
-        texto="📰 Tendencia en medios: "+texto
+    texto=f"{random.choice(prefijos)} {texto}".strip()
 
     return texto[:200]
 
 # -------------------------
-# DESCARGAR IMAGEN REAL
+# GENERAR IMAGEN IA
+# -------------------------
+
+def generar_imagen_ia(titulo):
+
+    try:
+
+        img=openai_client.images.generate(
+
+            model="gpt-image-1",
+            prompt=f"news photo about {titulo}",
+            size="1024x1024"
+
+        )
+
+        image_base64=img.data[0].b64_json
+
+        with open("imagen.jpg","wb") as f:
+
+            f.write(base64.b64decode(image_base64))
+
+        return "imagen.jpg"
+
+    except:
+
+        return None
+
+# -------------------------
+# DESCARGAR IMAGEN
 # -------------------------
 
 def descargar_imagen(url):
 
     if not url:
+
         return None
 
     try:
@@ -198,43 +298,12 @@ def descargar_imagen(url):
         img=requests.get(url,timeout=10).content
 
         with open("imagen.jpg","wb") as f:
+
             f.write(img)
 
         return "imagen.jpg"
 
     except:
-        return None
-
-# -------------------------
-# GENERAR IMAGEN IA
-# -------------------------
-
-def generar_imagen_ia(titular):
-
-    try:
-
-        prompt=f"news photo illustration about: {titular}"
-
-        img=openai_client.images.generate(
-            model="gpt-image-1",
-            prompt=prompt,
-            size="1024x1024"
-        )
-
-        image_base64=img.data[0].b64_json
-
-        import base64
-
-        with open("imagen.jpg","wb") as f:
-            f.write(base64.b64decode(image_base64))
-
-        print("Imagen generada por IA")
-
-        return "imagen.jpg"
-
-    except Exception as e:
-
-        print("Error generando imagen IA:",e)
 
         return None
 
@@ -248,30 +317,31 @@ def publicar():
 
     noticias=get_news()
 
-    noticia=seleccionar_noticia(noticias)
+    noticia=seleccionar_noticia(noticias,memoria)
 
-    titulo_limpio=noticia["titulo"].lower()[:80]
+    if noticia:
 
-    if titulo_limpio in memoria["publicadas"]:
-        print("Noticia ya publicada")
-        return
+        tweet=generar_tweet(noticia["titulo"])
 
-    tema,frecuencia=detectar_crecimiento(noticias)
+        if noticia["fuente"]:
 
-    tendencia=frecuencia>=3
+            tweet=f"{tweet} ({noticia['fuente']})"
 
-    tweet=generar_tweet(noticia["titulo"],tendencia)
+        imagen=descargar_imagen(noticia["imagen"])
 
-    if noticia["fuente"]:
-        tweet=f"{tweet} ({noticia['fuente']})"
+        if not imagen:
 
-    imagen=descargar_imagen(noticia["imagen"])
+            imagen=generar_imagen_ia(noticia["titulo"])
 
-    if not imagen:
+        titulo_limpio=noticia["titulo"].lower()[:80]
 
-        print("No hay imagen en RSS, generando con IA")
+        memoria["publicadas"].append(titulo_limpio)
 
-        imagen=generar_imagen_ia(noticia["titulo"])
+    else:
+
+        tweet="Análisis: situación política y económica de Venezuela sigue generando debate regional."
+
+        imagen=generar_imagen_ia("Venezuela news politics economy")
 
     try:
 
@@ -280,15 +350,15 @@ def publicar():
             media=twitter_media.media_upload(imagen)
 
             twitter_client.create_tweet(
+
                 text=tweet,
                 media_ids=[media.media_id]
+
             )
 
         else:
 
             twitter_client.create_tweet(text=tweet)
-
-        memoria["publicadas"].append(titulo_limpio)
 
         guardar_memoria(memoria)
 
@@ -303,6 +373,7 @@ def publicar():
 def ciclo():
 
     if horario_activo():
+
         publicar()
 
 schedule.every(1).minutes.do(ciclo)
@@ -312,4 +383,5 @@ print("Bot iniciado")
 while True:
 
     schedule.run_pending()
+
     time.sleep(30)
