@@ -21,16 +21,11 @@ TIMEZONE = ZoneInfo("America/Caracas")
 
 RSS_FEEDS = [
 
-# Google News
 "https://news.google.com/rss/search?q=venezuela&hl=es&gl=ES&ceid=ES:es",
-
-# Internacional
 "https://feeds.reuters.com/reuters/worldNews",
 "https://feeds.bbci.co.uk/mundo/rss.xml",
 "https://rss.dw.com/rdf/rss-es-all",
 "https://feeds.elpais.com/mrss-s/pages/ep/site/elpais.com/portada",
-
-# Venezuela
 "https://www.elnacional.com/feed/",
 "https://talcualdigital.com/feed/",
 "https://elpitazo.net/feed/"
@@ -44,19 +39,19 @@ MEMORY_FILE = "bot_memory.json"
 # -------------------------
 
 twitter_client = tweepy.Client(
-    consumer_key=os.environ["API_KEY"],
-    consumer_secret=os.environ["API_SECRET"],
-    access_token=os.environ["ACCESS_TOKEN"],
-    access_token_secret=os.environ["ACCESS_TOKEN_SECRET"]
+consumer_key=os.environ["API_KEY"],
+consumer_secret=os.environ["API_SECRET"],
+access_token=os.environ["ACCESS_TOKEN"],
+access_token_secret=os.environ["ACCESS_TOKEN_SECRET"]
 )
 
 twitter_media = tweepy.API(
-    tweepy.OAuth1UserHandler(
-        os.environ["API_KEY"],
-        os.environ["API_SECRET"],
-        os.environ["ACCESS_TOKEN"],
-        os.environ["ACCESS_TOKEN_SECRET"]
-    )
+tweepy.OAuth1UserHandler(
+os.environ["API_KEY"],
+os.environ["API_SECRET"],
+os.environ["ACCESS_TOKEN"],
+os.environ["ACCESS_TOKEN_SECRET"]
+)
 )
 
 openai_client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
@@ -84,31 +79,24 @@ def guardar_memoria(memoria):
 
 def horario_activo():
 
-    now = datetime.now(TIMEZONE)
+    now=datetime.now(TIMEZONE)
 
-    h = now.hour
-    m = now.minute
+    h=now.hour
+    m=now.minute
 
-    # Horas pico → cada 30 min
-    if (7 <= h < 9) or (12 <= h < 15) or (19 <= h < 22):
+    if (7<=h<9) or (12<=h<15) or (19<=h<22):
 
         if m in [0,30]:
-
             return True
 
-    # Horas normales → cada hora
-    if 6 <= h <= 23:
+    if 6<=h<=23 and m==0:
+        return True
 
-        if m == 0:
-
-            return True
-
-    # Madrugada → solo 2:00 y 4:00
-    if h in [2,4] and m == 0:
-
+    if h in [2,4] and m==0:
         return True
 
     return False
+
 # -------------------------
 # LEER RSS
 # -------------------------
@@ -139,20 +127,17 @@ def leer_feed(url):
 
                 imagen=match.group(1)
 
-        fuente=feed.feed.get("title","")
-
         noticias.append({
 
             "titulo":entry.title,
-            "imagen":imagen,
-            "fuente":fuente
+            "imagen":imagen
 
         })
 
     return noticias
 
 # -------------------------
-# AGREGAR TODAS LAS FUENTES
+# LEER TODAS LAS FUENTES
 # -------------------------
 
 def get_news():
@@ -190,19 +175,15 @@ def ordenar_noticias(noticias):
     conteo=Counter(claves)
 
     noticias_ordenadas=sorted(
-
-        noticias,
-
-        key=lambda n: conteo[" ".join(n["titulo"].lower().split()[:6])],
-
-        reverse=True
-
+    noticias,
+    key=lambda n: conteo[" ".join(n["titulo"].lower().split()[:6])],
+    reverse=True
     )
 
     return noticias_ordenadas
 
 # -------------------------
-# SELECCIONAR NOTICIA NUEVA
+# SELECCIONAR NOTICIA
 # -------------------------
 
 def seleccionar_noticia(noticias,memoria):
@@ -226,62 +207,47 @@ def seleccionar_noticia(noticias,memoria):
 def generar_tweet(titular):
 
     prompt=f"""
-Escribe un tweet informativo sobre esta noticia de Venezuela.
+Escribe un tweet sobre esta noticia de Venezuela.
 
 Titular:
 {titular}
 
+Redáctalo con tono periodístico pero con una ligera ironía inteligente.
 Máximo 180 caracteres.
 """
 
     r=openai_client.chat.completions.create(
-
-        model="gpt-4o-mini",
-
-        messages=[
-
-        {"role":"system","content":"Redactor periodístico especializado en Venezuela"},
-        {"role":"user","content":prompt}
-
-        ]
-
+    model="gpt-4o-mini",
+    messages=[
+    {"role":"system","content":"Analista político latinoamericano con estilo agudo e irónico"},
+    {"role":"user","content":prompt}
+    ]
     )
 
     texto=r.choices[0].message.content.strip()
 
-    prefijos=["Actualización:","Informe:","Última hora:",""]
-
-    texto=f"{random.choice(prefijos)} {texto}".strip()
-
     return texto[:200]
 
 # -------------------------
-# GENERAR IMAGEN IA
+# GENERAR CONTEXTO
 # -------------------------
 
-def generar_imagen_ia(titulo):
+def generar_contexto():
 
-    try:
+    prompt="""
+Escribe un tweet irónico e inteligente sobre la situación política o económica actual de Venezuela.
+Máximo 180 caracteres.
+"""
 
-        img=openai_client.images.generate(
+    r=openai_client.chat.completions.create(
+    model="gpt-4o-mini",
+    messages=[
+    {"role":"system","content":"Analista político con ironía elegante"},
+    {"role":"user","content":prompt}
+    ]
+    )
 
-            model="gpt-image-1",
-            prompt=f"news photo about {titulo}",
-            size="1024x1024"
-
-        )
-
-        image_base64=img.data[0].b64_json
-
-        with open("imagen.jpg","wb") as f:
-
-            f.write(base64.b64decode(image_base64))
-
-        return "imagen.jpg"
-
-    except:
-
-        return None
+    return r.choices[0].message.content.strip()
 
 # -------------------------
 # DESCARGAR IMAGEN
@@ -290,7 +256,6 @@ def generar_imagen_ia(titulo):
 def descargar_imagen(url):
 
     if not url:
-
         return None
 
     try:
@@ -300,6 +265,32 @@ def descargar_imagen(url):
         with open("imagen.jpg","wb") as f:
 
             f.write(img)
+
+        return "imagen.jpg"
+
+    except:
+
+        return None
+
+# -------------------------
+# IMAGEN IA
+# -------------------------
+
+def generar_imagen_ia(titulo):
+
+    try:
+
+        img=openai_client.images.generate(
+        model="gpt-image-1",
+        prompt=f"news illustration about {titulo}",
+        size="1024x1024"
+        )
+
+        image_base64=img.data[0].b64_json
+
+        with open("imagen.jpg","wb") as f:
+
+            f.write(base64.b64decode(image_base64))
 
         return "imagen.jpg"
 
@@ -323,10 +314,6 @@ def publicar():
 
         tweet=generar_tweet(noticia["titulo"])
 
-        if noticia["fuente"]:
-
-            tweet=f"{tweet} ({noticia['fuente']})"
-
         imagen=descargar_imagen(noticia["imagen"])
 
         if not imagen:
@@ -339,9 +326,11 @@ def publicar():
 
     else:
 
-        tweet="Análisis: situación política y económica de Venezuela sigue generando debate regional."
+        print("No hay noticias nuevas")
 
-        imagen=generar_imagen_ia("Venezuela news politics economy")
+        tweet=generar_contexto()
+
+        imagen=generar_imagen_ia("Venezuela politics economy news")
 
     try:
 
@@ -350,10 +339,8 @@ def publicar():
             media=twitter_media.media_upload(imagen)
 
             twitter_client.create_tweet(
-
-                text=tweet,
-                media_ids=[media.media_id]
-
+            text=tweet,
+            media_ids=[media.media_id]
             )
 
         else:
