@@ -19,13 +19,13 @@ from collections import Counter
 
 TIMEZONE = ZoneInfo("America/Caracas")
 
+WOEID_VENEZUELA = 395269
+
 RSS_FEEDS = [
 
 "https://news.google.com/rss/search?q=venezuela&hl=es&gl=ES&ceid=ES:es",
-"https://feeds.reuters.com/reuters/worldNews",
 "https://feeds.bbci.co.uk/mundo/rss.xml",
 "https://rss.dw.com/rdf/rss-es-all",
-"https://feeds.elpais.com/mrss-s/pages/ep/site/elpais.com/portada",
 "https://www.elnacional.com/feed/",
 "https://talcualdigital.com/feed/",
 "https://elpitazo.net/feed/"
@@ -35,17 +35,17 @@ RSS_FEEDS = [
 MEMORY_FILE = "bot_memory.json"
 
 # -------------------------
-# CLIENTES
+# CLIENTES API
 # -------------------------
 
-twitter_client = tweepy.Client(
+client = tweepy.Client(
 consumer_key=os.environ["API_KEY"],
 consumer_secret=os.environ["API_SECRET"],
 access_token=os.environ["ACCESS_TOKEN"],
 access_token_secret=os.environ["ACCESS_TOKEN_SECRET"]
 )
 
-twitter_media = tweepy.API(
+api = tweepy.API(
 tweepy.OAuth1UserHandler(
 os.environ["API_KEY"],
 os.environ["API_SECRET"],
@@ -66,7 +66,7 @@ def cargar_memoria():
         with open(MEMORY_FILE,"r") as f:
             return json.load(f)
     except:
-        return {"publicadas":[]}
+        return {"publicadas":[],"ultimo_trend":0}
 
 def guardar_memoria(memoria):
 
@@ -98,7 +98,7 @@ def horario_activo():
     return False
 
 # -------------------------
-# LEER RSS
+# RSS
 # -------------------------
 
 def leer_feed(url):
@@ -112,11 +112,9 @@ def leer_feed(url):
         imagen=None
 
         if "media_content" in entry:
-
             imagen=entry.media_content[0]["url"]
 
         elif "media_thumbnail" in entry:
-
             imagen=entry.media_thumbnail[0]["url"]
 
         elif "summary" in entry:
@@ -124,20 +122,17 @@ def leer_feed(url):
             match=re.search(r'<img[^>]+src="([^">]+)"',entry.summary)
 
             if match:
-
                 imagen=match.group(1)
 
         noticias.append({
-
             "titulo":entry.title,
             "imagen":imagen
-
         })
 
     return noticias
 
 # -------------------------
-# LEER TODAS LAS FUENTES
+# AGREGAR FUENTES
 # -------------------------
 
 def get_news():
@@ -148,9 +143,7 @@ def get_news():
 
         try:
 
-            noticias=leer_feed(url)
-
-            todas.extend(noticias)
+            todas.extend(leer_feed(url))
 
         except:
 
@@ -204,38 +197,15 @@ def seleccionar_noticia(noticias,memoria):
 # GENERAR TWEET
 # -------------------------
 
-def generar_tweet(titular):
+def generar_tweet(titulo):
 
     prompt=f"""
 Escribe un tweet sobre esta noticia de Venezuela.
 
 Titular:
-{titular}
+{titulo}
 
-Redáctalo con tono periodístico pero con una ligera ironía inteligente.
-Máximo 180 caracteres.
-"""
-
-    r=openai_client.chat.completions.create(
-    model="gpt-4o-mini",
-    messages=[
-    {"role":"system","content":"Analista político latinoamericano con estilo agudo e irónico"},
-    {"role":"user","content":prompt}
-    ]
-    )
-
-    texto=r.choices[0].message.content.strip()
-
-    return texto[:200]
-
-# -------------------------
-# GENERAR CONTEXTO
-# -------------------------
-
-def generar_contexto():
-
-    prompt="""
-Escribe un tweet irónico e inteligente sobre la situación política o económica actual de Venezuela.
+Con tono periodístico y una ligera ironía.
 Máximo 180 caracteres.
 """
 
@@ -247,10 +217,31 @@ Máximo 180 caracteres.
     ]
     )
 
+    return r.choices[0].message.content.strip()[:200]
+
+# -------------------------
+# CONTEXTO
+# -------------------------
+
+def generar_contexto():
+
+    prompt="""
+Escribe un tweet irónico sobre la situación política o económica de Venezuela.
+Máximo 180 caracteres.
+"""
+
+    r=openai_client.chat.completions.create(
+    model="gpt-4o-mini",
+    messages=[
+    {"role":"system","content":"Analista político latinoamericano"},
+    {"role":"user","content":prompt}
+    ]
+    )
+
     return r.choices[0].message.content.strip()
 
 # -------------------------
-# DESCARGAR IMAGEN
+# IMAGEN
 # -------------------------
 
 def descargar_imagen(url):
@@ -263,7 +254,6 @@ def descargar_imagen(url):
         img=requests.get(url,timeout=10).content
 
         with open("imagen.jpg","wb") as f:
-
             f.write(img)
 
         return "imagen.jpg"
@@ -289,7 +279,6 @@ def generar_imagen_ia(titulo):
         image_base64=img.data[0].b64_json
 
         with open("imagen.jpg","wb") as f:
-
             f.write(base64.b64decode(image_base64))
 
         return "imagen.jpg"
@@ -299,7 +288,48 @@ def generar_imagen_ia(titulo):
         return None
 
 # -------------------------
-# PUBLICAR
+# TENDENCIAS
+# -------------------------
+
+def buscar_tendencia():
+
+    try:
+
+        trends = api.get_place_trends(WOEID_VENEZUELA)
+
+        return trends[0]["trends"][0]["name"]
+
+    except:
+
+        return None
+
+# -------------------------
+# GENERAR BREAKING
+# -------------------------
+
+def generar_breaking(tema):
+
+    prompt=f"""
+En Venezuela es tendencia el tema:
+
+{tema}
+
+Escribe un tweet BREAKING con ironía inteligente.
+Máximo 180 caracteres.
+"""
+
+    r=openai_client.chat.completions.create(
+    model="gpt-4o-mini",
+    messages=[
+    {"role":"system","content":"Analista político con ironía"},
+    {"role":"user","content":prompt}
+    ]
+    )
+
+    return "BREAKING: "+r.choices[0].message.content.strip()
+
+# -------------------------
+# PUBLICAR NOTICIA
 # -------------------------
 
 def publicar():
@@ -317,44 +347,57 @@ def publicar():
         imagen=descargar_imagen(noticia["imagen"])
 
         if not imagen:
-
             imagen=generar_imagen_ia(noticia["titulo"])
 
-        titulo_limpio=noticia["titulo"].lower()[:80]
-
-        memoria["publicadas"].append(titulo_limpio)
+        memoria["publicadas"].append(noticia["titulo"].lower()[:80])
 
     else:
 
-        print("No hay noticias nuevas")
-
         tweet=generar_contexto()
 
-        imagen=generar_imagen_ia("Venezuela politics economy news")
+        imagen=generar_imagen_ia("venezuela politics")
 
-    try:
+    if imagen:
 
-        if imagen:
+        media=api.media_upload(imagen)
 
-            media=twitter_media.media_upload(imagen)
+        client.create_tweet(
+        text=tweet,
+        media_ids=[media.media_id]
+        )
 
-            twitter_client.create_tweet(
-            text=tweet,
-            media_ids=[media.media_id]
-            )
+    else:
 
-        else:
+        client.create_tweet(text=tweet)
 
-            twitter_client.create_tweet(text=tweet)
-
-        guardar_memoria(memoria)
-
-    except Exception as e:
-
-        print("Error publicando:",e)
+    guardar_memoria(memoria)
 
 # -------------------------
-# CICLO
+# PUBLICAR TENDENCIA
+# -------------------------
+
+def publicar_tendencia():
+
+    memoria=cargar_memoria()
+
+    if time.time() - memoria["ultimo_trend"] < 10800:
+        return
+
+    tema=buscar_tendencia()
+
+    if not tema:
+        return
+
+    tweet=generar_breaking(tema)
+
+    client.create_tweet(text=tweet)
+
+    memoria["ultimo_trend"]=time.time()
+
+    guardar_memoria(memoria)
+
+# -------------------------
+# SCHEDULER
 # -------------------------
 
 def ciclo():
@@ -364,6 +407,7 @@ def ciclo():
         publicar()
 
 schedule.every(1).minutes.do(ciclo)
+schedule.every(3).hours.do(publicar_tendencia)
 
 print("Bot iniciado")
 
